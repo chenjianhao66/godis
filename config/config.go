@@ -96,6 +96,8 @@ func parse(src io.Reader) *ServerProperties {
 }
 
 // SetupConfig read config file and store properties into Properties
+//
+// 读取配置文件，调用parse函数来读取文件内容，最后赋值给Properties包级变量
 func SetupConfig(configFilename string) {
 	file, err := os.Open(configFilename)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/hdt3213/godis/interface/redis"
 	"github.com/hdt3213/godis/lib/logger"
 	"github.com/hdt3213/godis/redis/protocol"
@@ -84,8 +85,11 @@ func parse0(reader io.Reader, ch chan<- *Payload) {
 	for {
 		// read line
 		var ioErr bool
+		// 根据bufReader读数据，根据bulkLen的值来确认是读一行数据还是读 (bulkLen值+2) 长度的数据
 		msg, ioErr, err = readLine(bufReader, &state)
+		// 从reader里读取数据失败
 		if err != nil {
+			// 判断是否是读取失败，是读取失败则关闭管道
 			if ioErr { // encounter io err, stop read
 				ch <- &Payload{
 					Err: err,
@@ -94,14 +98,17 @@ func parse0(reader io.Reader, ch chan<- *Payload) {
 				return
 			}
 			// protocol err, reset read state
+			// 是读取的msg切片最后1个或者1个2个字符不是 \r和\n
 			ch <- &Payload{
 				Err: err,
 			}
 			state = readState{}
 			continue
 		}
+		fmt.Printf("从conn连接中获取到的数据 -> %v \n", string(msg))
 
 		// parse line
+		// 判断是否要读取多行，这里是读单行的逻辑
 		if !state.readingMultiLine {
 			// receive new response
 			if msg[0] == '*' {
@@ -148,6 +155,7 @@ func parse0(reader io.Reader, ch chan<- *Payload) {
 				continue
 			}
 		} else {
+			// 读取多行
 			// receive following bulk protocol
 			err = readBody(msg, &state)
 			if err != nil {
@@ -175,6 +183,17 @@ func parse0(reader io.Reader, ch chan<- *Payload) {
 	}
 }
 
+// 根据 state 对象的bulkLen字段来判断
+//
+// 如果bulkLen==0，则是读一行数据；如果bulkLen != 0，那么则读 (bulkLen字段+2) 长度的数据，然后将bulkLen字段重置为0。
+//
+// 有三种返回结果：
+//
+// 1. 如果读取失败则返回 nil,true,err；
+//
+// 2. 如果是读取消息的长度为0或者msg切片倒数第一个字符或者第一和第二个字符不为 \n和\r时，则返回 nil,false,errors.new("custom")
+//
+// 3. 读取成功则返回 msg,false,nil
 func readLine(bufReader *bufio.Reader, state *readState) ([]byte, bool, error) {
 	var msg []byte
 	var err error
@@ -183,6 +202,7 @@ func readLine(bufReader *bufio.Reader, state *readState) ([]byte, bool, error) {
 		if err != nil {
 			return nil, true, err
 		}
+		// 如果读取到的消息长度为0，或者msg切片的倒数第二个位置不是 \r 时则进入if语句
 		if len(msg) == 0 || msg[len(msg)-2] != '\r' {
 			return nil, false, errors.New("protocol error: " + string(msg))
 		}
@@ -204,7 +224,9 @@ func readLine(bufReader *bufio.Reader, state *readState) ([]byte, bool, error) {
 
 func parseMultiBulkHeader(msg []byte, state *readState) error {
 	var err error
+	// 预期的行数
 	var expectedLine uint64
+	// 将msg切片去头和倒数2位byte，并转成int32赋值给expectedLine
 	expectedLine, err = strconv.ParseUint(string(msg[1:len(msg)-2]), 10, 32)
 	if err != nil {
 		return errors.New("protocol error: " + string(msg))
@@ -226,6 +248,7 @@ func parseMultiBulkHeader(msg []byte, state *readState) error {
 
 func parseBulkHeader(msg []byte, state *readState) error {
 	var err error
+	// 将切片切割，去头和倒数2位,返回int64类型的数值并赋值给state的bulkLen字段
 	state.bulkLen, err = strconv.ParseInt(string(msg[1:len(msg)-2]), 10, 64)
 	if err != nil {
 		return errors.New("protocol error: " + string(msg))
