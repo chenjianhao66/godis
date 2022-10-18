@@ -309,17 +309,30 @@ func undoExpire(db *DB, args [][]byte) []CmdLine {
 }
 
 func init() {
+	// 删除一个或多个key
 	RegisterCommand("Del", execDel, writeAllKeys, undoDel, -2)
+	// 设置一个key的过期时间，时间的格式为秒
 	RegisterCommand("Expire", execExpire, writeFirstKey, undoExpire, 3)
+	// 设置一个key的过期时间，时间的格式是uinx时间戳并精确到秒
 	RegisterCommand("ExpireAt", execExpireAt, writeFirstKey, undoExpire, 3)
+	// 设置一个key的过期时间，时间的格式为毫秒
 	RegisterCommand("PExpire", execPExpire, writeFirstKey, undoExpire, 3)
+	// 设置一个key的国企时间，时间的格式是uinx时间戳并精确到毫秒
 	RegisterCommand("PExpireAt", execPExpireAt, writeFirstKey, undoExpire, 3)
+	// 以秒为单位返回key的剩余过期时间
 	RegisterCommand("TTL", execTTL, readFirstKey, nil, 2)
+	// 以毫秒为单位返回key的剩余过期时间
 	RegisterCommand("PTTL", execPTTL, readFirstKey, nil, 2)
+	// 删除key的过期时间，使得key永不过期
 	RegisterCommand("Persist", execPersist, writeFirstKey, undoExpire, 2)
+	// 检查给定key是否存在
 	RegisterCommand("Exists", execExists, readAllKeys, nil, -2)
+	// 以字符串的形式返回存在在key中的值的类型
 	RegisterCommand("Type", execType, readFirstKey, nil, 2)
+	// 修改key的名字为 newkey，如果key不存在则返回错误
 	RegisterCommand("Rename", execRename, prepareRename, undoRename, 3)
+	// 在新的key不存在时修改key的名称为newkey
 	RegisterCommand("RenameNx", execRenameNx, prepareRename, undoRename, 3)
+	// 用于查找所有匹配给定模式 pattern 的 key 。
 	RegisterCommand("Keys", execKeys, noPrepare, nil, 2)
 }

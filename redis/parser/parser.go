@@ -61,11 +61,15 @@ func ParseOne(data []byte) (redis.Reply, error) {
 }
 
 type readState struct {
-	readingMultiLine  bool
+	readingMultiLine bool
+	// 命令参数的字符数
 	expectedArgsCount int
-	msgType           byte
-	args              [][]byte
-	bulkLen           int64
+	// msgType 的取值为 * $ + - :，分别代表数组 大容量字符串 单行字符串 错误 整型，具体参考Redis的RESP协议
+	msgType byte
+	args    [][]byte
+	// 在读取到 * 或者 $ 时设置，代表着下次到来的数据要读取的字符个数
+	// 比如
+	bulkLen int64
 }
 
 func (s *readState) finished() bool {
@@ -108,9 +112,13 @@ func parse0(reader io.Reader, ch chan<- *Payload) {
 		fmt.Printf("从conn连接中获取到的数据 -> %v \n", string(msg))
 
 		// parse line
-		// 判断是否要读取多行，这里是读单行的逻辑
+		// 根据RESP协议，在真正的命令之前，会有 * 号和 $ 号来表示数组长度或者命令参数的字符长度
+		// 如果state对象的readingMultiLine字段为false，代表是要读取 * 和 $的
+		// 如果state对象的readingMultiLine字段为true，代表要读取用户输入的命令
 		if !state.readingMultiLine {
 			// receive new response
+			// 获取用户输入命令的参数的字符切片数量，也就是参数数量
+			// 比如 get name，那么值=2
 			if msg[0] == '*' {
 				// multi bulk protocol
 				err = parseMultiBulkHeader(msg, &state)
@@ -198,6 +206,8 @@ func readLine(bufReader *bufio.Reader, state *readState) ([]byte, bool, error) {
 	var msg []byte
 	var err error
 	if state.bulkLen == 0 { // read normal line
+		// 读取RESP协议中的 * 值或者$值，*值代表了用户输入命令的数组长度，比如（get name） 那么*值就为2
+		// $值代表了用户输入命令的参数长度，比如（get name），$的取值就是 3或者4，代表着get和name的字符长度
 		msg, err = bufReader.ReadBytes('\n')
 		if err != nil {
 			return nil, true, err
@@ -207,6 +217,8 @@ func readLine(bufReader *bufio.Reader, state *readState) ([]byte, bool, error) {
 			return nil, false, errors.New("protocol error: " + string(msg))
 		}
 	} else { // read bulk line (binary safe)
+		// 代表已经读取过了*或者$，开始读取命令
+		// 比如我输入了 get name 这个命令，走到这里也就开始读取 get 或者 name 了
 		msg = make([]byte, state.bulkLen+2)
 		_, err = io.ReadFull(bufReader, msg)
 		if err != nil {
@@ -217,16 +229,21 @@ func readLine(bufReader *bufio.Reader, state *readState) ([]byte, bool, error) {
 			msg[len(msg)-1] != '\n' {
 			return nil, false, errors.New("protocol error: " + string(msg))
 		}
+		// 将下次要读取的参数长度重置为0，下次读取时就要读取 *或者$（参数长度） 了
 		state.bulkLen = 0
 	}
 	return msg, false, nil
 }
 
+// 获取用户输入命令的参数个数
+// 比如 get name，根据RESP协议，代表用户命令输入个数的*号后面跟的是2,因为有2个参数分别是get 和 name
 func parseMultiBulkHeader(msg []byte, state *readState) error {
 	var err error
-	// 预期的行数
+	// 用户输入命令参数的个数
 	var expectedLine uint64
 	// 将msg切片去头和倒数2位byte，并转成int32赋值给expectedLine
+	// 去除 * 号和结尾的 /r和/n，使用切片表达式 [1:2],拿到*号跟的数值
+	// 闭区间之所以是2是因为使用了len()函数，msg的长度是4,分别是 *2\r\n，4-2=2
 	expectedLine, err = strconv.ParseUint(string(msg[1:len(msg)-2]), 10, 32)
 	if err != nil {
 		return errors.New("protocol error: " + string(msg))
@@ -294,10 +311,12 @@ func parseSingleLineReply(msg []byte) (redis.Reply, error) {
 
 // read the non-first lines of multi bulk protocol or bulk protocol
 func readBody(msg []byte, state *readState) error {
+	// 读取命令参数，剔除CRLF字符
 	line := msg[0 : len(msg)-2]
 	var err error
 	if line[0] == '$' {
-		// bulk protocol
+		// 头一个字符串如果是 $，存储下一次读取的数据长度到state对象的bulkLen字段
+		// bulkLen字段会在 readLine 函数中用到，用来读取制定长度的数据
 		state.bulkLen, err = strconv.ParseInt(string(line[1:]), 10, 64)
 		if err != nil {
 			return errors.New("protocol error: " + string(msg))
@@ -307,6 +326,7 @@ func readBody(msg []byte, state *readState) error {
 			state.bulkLen = 0
 		}
 	} else {
+		// 获取到命令参数，追加到statue对象的args字段数组中
 		state.args = append(state.args, line)
 	}
 	return nil
